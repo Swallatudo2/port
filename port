@@ -16,8 +16,8 @@ add_port() {
         exit 1
     fi
 
-    if ! [[ "$local_port" =~ ^[0-9]+$ ]] || ((local_port < 1024 || local_port > 65535)); then
-        echo "Invalid port number. Please enter a port between 1024 and 65535."
+    if ! [[ "$local_port" =~ ^[0-9]+$ ]] || ((local_port < 0 || local_port > 65535)); then
+        echo "Invalid port number. Please enter a port between 0 and 65535."
         exit 1
     fi
 
@@ -29,7 +29,7 @@ add_port() {
 
     # Generate a random external port
     local random_port
-    random_port=$(shuf -i 1024-65535 -n 1)
+    random_port=$(shuf -i 0-65535 -n 1)
 
     ssh -o StrictHostKeyChecking=no -f -N -R "${random_port}:localhost:${local_port}" serveo.net > /dev/null 2>&1 &
     ssh_pid=$!
