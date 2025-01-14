@@ -1,0 +1,128 @@
+#!/bin/bash
+
+PORTS_FILE="/ports.info.txt"
+LOG_FILE="/var/log/serveo_tunnel.log"
+SERVEO_HOST="138.68.79.95"
+
+log_message() {
+    local message=$1
+    echo "$(date +'%Y-%m-%d %H:%M:%S') - ${message}" >> "$LOG_FILE"
+}
+
+add_port() {
+    local local_port=$1
+    if [[ -z "$local_port" ]]; then
+        echo "Please provide a local port to forward."
+        exit 1
+    fi
+
+    if ! [[ "$local_port" =~ ^[0-9]+$ ]] || ((local_port < 1024 || local_port > 65535)); then
+        echo "Invalid port number. Please enter a port between 1024 and 65535."
+        exit 1
+    fi
+
+    # Check if the port is already mapped
+    if grep -q ":${local_port}$" "$PORTS_FILE"; then
+        echo "Port ${local_port} is already being forwarded."
+        exit 1
+    fi
+
+    # Generate a random external port
+    local random_port
+    random_port=$(shuf -i 1024-65535 -n 1)
+
+    ssh -o StrictHostKeyChecking=no -f -N -R "${random_port}:localhost:${local_port}" serveo.net > /dev/null 2>&1 &
+    ssh_pid=$!
+
+    echo "${random_port}:${local_port}:${ssh_pid}" >> "$PORTS_FILE"
+
+    echo "Local port ${local_port} is now accessible on ${SERVEO_HOST}:${random_port}"
+    log_message "Added tunnel for local port ${local_port} -> public port ${random_port} (PID: ${ssh_pid})"
+}
+
+remove_port() {
+    local local_port=$1
+    if [[ -z "$local_port" ]]; then
+        echo "Please provide a local port to remove."
+        exit 1
+    fi
+
+    random_port=$(grep ":${local_port}:" "$PORTS_FILE" | cut -d':' -f1)
+
+    if [[ -z "$random_port" ]]; then
+        echo "Port ${local_port} not found."
+        exit 1
+    fi
+
+    ssh_pid=$(grep ":${local_port}:" "$PORTS_FILE" | cut -d':' -f3)
+    kill "$ssh_pid" > /dev/null 2>&1
+    if [[ $? -eq 0 ]]; then
+        sed -i "/${random_port}:${local_port}/d" "$PORTS_FILE"
+        echo "Port ${local_port} has been removed."
+        log_message "Removed tunnel for local port ${local_port} (PID: ${ssh_pid})"
+    else
+        echo "Failed to remove tunnel for port ${local_port}."
+        log_message "Failed to remove tunnel for local port ${local_port} (PID: ${ssh_pid})"
+    fi
+}
+
+refresh_ports() {
+    if [[ ! -f "$PORTS_FILE" ]]; then
+        echo "No ports to refresh."
+        exit 1
+    fi
+
+    while IFS= read -r line; do
+        random_port=$(echo "$line" | cut -d':' -f1)
+        local_port=$(echo "$line" | cut -d':' -f2)
+        ssh_pid=$(echo "$line" | cut -d':' -f3)
+
+        # Check if the SSH process is still running
+        if ! ps -p "$ssh_pid" > /dev/null; then
+            ssh -o StrictHostKeyChecking=no -f -N -R "${random_port}:localhost:${local_port}" serveo.net > /dev/null 2>&1 &
+            new_ssh_pid=$!
+            sed -i "s/:${ssh_pid}$/:${new_ssh_pid}/" "$PORTS_FILE"
+            log_message "Restarted tunnel for local port ${local_port} -> public port ${random_port} (New PID: ${new_ssh_pid})"
+        else
+            echo "Tunnel for port ${local_port} is already running."
+        fi
+    done < "$PORTS_FILE"
+
+    echo "Ports have been successfully refreshed."
+}
+
+list_ports() {
+    if [[ ! -f "$PORTS_FILE" ]]; then
+        echo "No ports to list."
+        exit 1
+    fi
+
+    echo "Current port mappings:"
+    echo "--------------------------------------"
+    while IFS= read -r line; do
+        random_port=$(echo "$line" | cut -d':' -f1)
+        local_port=$(echo "$line" | cut -d':' -f2)
+        ssh_pid=$(echo "$line" | cut -d':' -f3)
+        echo "Local port ${local_port} -> Public port ${random_port} (PID: ${ssh_pid})"
+    done < "$PORTS_FILE"
+    echo "--------------------------------------"
+}
+
+case "$1" in
+    add)
+        add_port "$2"
+        ;;
+    remove)
+        remove_port "$2"
+        ;;
+    refresh)
+        refresh_ports
+        ;;
+    list)
+        list_ports
+        ;;
+    *)
+        echo "Usage: $0 {add|remove|refresh|list} [port]"
+        exit 1
+        ;;
+esac
